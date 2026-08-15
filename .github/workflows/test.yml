@@ -1,0 +1,147 @@
+name: tests
+
+# The bloom-filter module is written in boru, so CI builds the `boru`
+# interpreter from source before it can run anything. This library TRACKS
+# boru-lang/boru MAIN: every run resolves main's current HEAD and builds that
+# commit (the binary is cached by the resolved SHA, so it only rebuilds when
+# main advances). The daily schedule surfaces upstream breaks even while this
+# repo is idle — boru is under active development and breaks are expected.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out bloom-filter
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Resolve boru main HEAD
+        id: boruref
+        run: echo "sha=$(git ls-remote https://github.com/boru-lang/boru.git main | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      # The compiled binary depends only on the resolved boru SHA (and the OS),
+      # so an unchanged main HEAD hits the cache; a new HEAD misses and rebuilds.
+      - name: Cache boru binary
+        id: cache-boru
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/boru
+          key: boru-${{ steps.boruref.outputs.sha }}-${{ runner.os }}
+
+      - name: Check out boru source
+        if: steps.cache-boru.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: boru-lang/boru
+          ref: ${{ steps.boruref.outputs.sha }}
+          path: boru-src
+
+      # The documented `go install …/cmd/go/aql@latest` cannot work while
+      # cmd/go/go.mod carries replace directives, so we build from the
+      # checkout with GOWORK=off -mod=mod instead.
+      - name: Build boru
+        if: steps.cache-boru.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          cd boru-src/cmd/go
+          GOWORK=off GOFLAGS=-mod=mod go build \
+            -ldflags "-X github.com/boru-lang/boru/cmd/go.Version=${{ steps.boruref.outputs.sha }}" \
+            -o "$HOME/.local/bin/boru" ./boru
+
+      - name: Add boru to PATH
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Report boru version
+        run: boru -version
+
+      # Each suite ends with `0 test.fail-count end assert.equal`, so a
+      # failure makes boru exit non-zero and fails the step.
+      - name: Unit tests (direct)
+        run: boru test/bloom_unit_test.aql
+
+      - name: Unit tests (spec format)
+        run: boru test/bloom_unit_spec.aql
+
+      - name: Property tests (direct)
+        run: boru test/bloom_prop_test.aql
+
+      - name: Property tests (spec format)
+        run: boru test/bloom_prop_spec.aql
+
+      - name: Smoke test
+        run: boru test/bloom_smoke_test.aql
+
+      # Advisory static check — NOT a gate. Checking bloom.aql ALONE still
+      # surfaces false `unused_def`/`no_signature` diagnostics: the library
+      # exports its words by reference (`make-bloom/r`, …) so the checker
+      # treats the export map as a non-use site and analyses each word body
+      # without caller types. (Checked THROUGH a suite — where the words are
+      # called with concrete types — `boru check` is clean; the gating
+      # `divergence` job below asserts exactly that.) Run with `--soft` +
+      # `continue-on-error` so the diagnostics surface without failing the build.
+      - name: Static check (advisory, non-gating)
+        continue-on-error: true
+        run: boru check --soft bloom.aql
+
+  # Gating three-surface guard: every suite must interpret, `boru check` with
+  # zero errors, AND match under the byte compiler (`boru --compile`). run.sh
+  # resolves boru main HEAD itself and builds it (via codeload tarball, cached
+  # by the resolved SHA) so it is self-contained. See test/divergence/README.md.
+  divergence:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out bloom-filter
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: interpreter / check / byte-compiler agreement
+        run: test/divergence/run.sh
+
+  # Lightweight guard for the agent-skill packaging. The plugin must bundle its
+  # own copy of the skill — plugins can't point at an external .claude/skills
+  # dir — so two copies exist and can drift.
+  consistency:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out bloom-filter
+        uses: actions/checkout@v4
+
+      - name: SKILL.md copies are in sync
+        run: |
+          canonical=.claude/skills/bloom-filter-aql/SKILL.md
+          bundled=plugins/bloom-filter-aql/skills/bloom-filter-aql/SKILL.md
+          if ! diff -u "$canonical" "$bundled"; then
+            echo "::error file=$bundled::Plugin skill has drifted from $canonical"
+            echo "Fix by copying the canonical skill over the bundled one:"
+            echo "  cp $canonical $bundled"
+            exit 1
+          fi
+          echo "SKILL.md copies are identical."
+
+      - name: JSON manifests are valid
+        run: |
+          for j in .claude-plugin/marketplace.json \
+                   plugins/bloom-filter-aql/.claude-plugin/plugin.json \
+                   api.json; do
+            if python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$j"; then
+              echo "ok: $j"
+            else
+              echo "::error file=$j::invalid JSON"
+              exit 1
+            fi
+          done

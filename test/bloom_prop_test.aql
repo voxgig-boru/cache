@@ -1,0 +1,251 @@
+# Property-based tests for bloom-filter — DIRECT-CODE FORM.
+#
+# This file deliberately exercises one of boru:test's two property-test
+# surfaces: the imperative `Test.check-prop` driver, called directly in
+# code with explicit run / seed / shrink counts —
+#
+#   Test.check-prop NAME  [GEN-BODY]  [PROP-BODY]  RUNS  SEED  MAX-SHRINKS
+#
+# The sibling file `test/bloom_prop_spec.aql` covers the SAME idea
+# through the other surface — the declarative `PropertySpec` built by
+# `Test.prop` and run by `Test.run-property`. Keeping both is on
+# purpose: together they exercise both halves of the framework. Because
+# this form takes RUNS explicitly, it carries the expensive O(m)
+# properties (merge, encode, decode) at a smaller run budget than the
+# declarative form's fixed default of 100.
+#
+# GEN-BODY: code that runs with `r` bound to the random source; must
+#           leave exactly one value on the stack (the input).
+# PROP-BODY: code that runs with the generated input on the stack;
+#           must return a Boolean.
+#
+# Run:
+#   aql test/bloom_prop_test.aql
+
+
+import "boru:test" end
+import "boru:array-util" end
+import "boru:math-util" end
+import "boru:string-util" end
+import "./bloom.aql" end
+
+
+# Shared character set for generated keys.
+def charset "abcdefghijklmnopqrstuvwxyz0123456789"
+
+
+# --- P1. No false negatives ----------------------------------------
+#
+# For every randomly-generated key, after inserting it into a fresh
+# filter, `contains` returns true. This is the bloom filter's hard
+# guarantee — any failure here is a correctness bug.
+
+Test.check-prop "no-false-negatives"
+  [r.string charset 8]                                # gen: 8-char key
+  [
+    var [[s]
+      def bf ({n: 1000, p: 0.01} Bloom.make end)
+      def _ (bf Bloom.add s end)
+      bf Bloom.contains s end
+    ]
+  ]
+  10 1 0
+end
+
+
+# --- P2. added counter tracks insertion count ---------------------
+#
+# After inserting N distinct items, bf.added == N. (The keys are
+# generated to be distinct via the iota index.)
+
+Test.check-prop "added-equals-insert-count"
+  [r.int 1 50]                                        # gen: N in [1, 50]
+  [
+    var [[n]
+      def bf ({n: 1000, p: 0.01} Bloom.make end)
+      def _ (iota n each [
+        var [[i]
+          def key (convert String i)
+          def _2 (bf Bloom.add key end)
+          0
+        ]
+      ])
+      (bf "added" get) eq n
+    ]
+  ]
+  10 1 0
+end
+
+
+# --- P3. all inserted items are contained --------------------------
+#
+# Combines P1 and P2 over a generated list of keys: every one of the
+# N inserted distinct keys is contained in the filter afterwards.
+
+Test.check-prop "bulk-no-false-negatives"
+  [r.int 5 30]                                        # gen: N in [5, 30]
+  [
+    var [[n]
+      def bf ({n: 1000, p: 0.01} Bloom.make end)
+      def _ (iota n each [
+        var [[i]
+          def key (convert String i)
+          def _2 (bf Bloom.add key end)
+          0
+        ]
+      ])
+      def hits (iota n each [
+        var [[i]
+          def key (convert String i)
+          if (bf Bloom.contains key end) [1] [0]
+        ]
+      ])
+      n eq (0 hits [add end] fold)
+    ]
+  ]
+  10 1 0
+end
+
+
+# --- P4. derive-m / derive-k match the textbook formulas ----------
+#
+# For any valid (n, p), the constructed filter's m and k satisfy:
+#   m == ceil(-n * ln(p) / (ln 2)^2)
+#   k == round((m/n) * ln 2)
+# Re-deriving these inside the property uses the same math but is
+# computed independently of make-bloom.
+
+Test.check-prop "derived-m-formula"
+  [r.int 100 5000]                                    # gen: n in [100, 5000]
+  [
+    var [[n]
+      def p 0.01
+      def bf ({n: n, p: p} Bloom.make end)
+      def lnp (p MathUtil.log)
+      def ln2 (2 MathUtil.log)
+      def num (n MathUtil.negate convert Float mul lnp)
+      def den (ln2 mul ln2)
+      def m-expected (num div den MathUtil.ceil)
+      m-expected eq bf.m
+    ]
+  ]
+  10 1 0
+end
+
+Test.check-prop "derived-k-formula"
+  [r.int 100 5000]                                    # gen: n in [100, 5000]
+  [
+    var [[n]
+      def p 0.01
+      def bf ({n: n, p: p} Bloom.make end)
+      def ln2 (2 MathUtil.log)
+      def k-expected (bf.m convert Float mul ln2 div n MathUtil.round)
+      k-expected eq bf.k
+    ]
+  ]
+  10 1 0
+end
+
+
+# --- P5. merge of (a, b) contains every item added to either -----
+#
+# Insert one item into each of two same-(n,p) filters, merge them,
+# and verify both items are contained in the merged result.
+#
+# We use a small filter (n=100) here because `Bloom.merge` is O(m)
+# per call (it walks every bit), so even modest runs add up at
+# n=1000 / m=9586.
+
+Test.check-prop "merge-preserves-membership"
+  [r.list-of [r.string charset 6] 2]                  # gen: [a-key, b-key]
+  [
+    var [[pair]
+      def a-key (pair get 0)
+      def b-key (pair get 1)
+      def a ({n: 100, p: 0.05} Bloom.make end)
+      def b ({n: 100, p: 0.05} Bloom.make end)
+      def _a (a Bloom.add a-key end)
+      def _b (b Bloom.add b-key end)
+      def merged (a Bloom.merge b end)
+      def has-a (merged Bloom.contains a-key end)
+      def has-b (merged Bloom.contains b-key end)
+      has-a and has-b
+    ]
+  ]
+  10 1 0
+end
+
+
+# --- P6. encode is non-empty and round-trips structural invariants -
+#
+# After inserting random items, the encoded payload string contains
+# the params (`n:`, `p:`, `m:`, `k:`) and an `added:` count that
+# matches what we asked for.
+
+# Encode walks every bit (O(m) per call), so we keep n small and
+# the run count low. StringUtil.indexof is needle-first / haystack-
+# LAST (it flipped to subject-last after db828ec).
+Test.check-prop "encode-contains-params"
+  [r.string charset 8]
+  [
+    var [[s]
+      def bf ({n: 100, p: 0.05} Bloom.make end)
+      def _ (bf Bloom.add s end)
+      def payload (bf Bloom.encode end)
+      def has-n   ((StringUtil.indexof "n:100"   payload) gte 0)
+      def has-fp  ((StringUtil.indexof "p:0.05"  payload) gte 0)
+      def has-a   ((StringUtil.indexof "added:1" payload) gte 0)
+      has-n and has-fp and has-a
+    ]
+  ]
+  5 1 0
+end
+
+
+# --- P7. decode round-trips encode ---------------------------------
+#
+# decode(encode(bf)) rebuilds a filter that reports the same params,
+# the same exact insert count, and (no false negatives surviving the
+# trip) still contains the inserted key. Encode and decode are both
+# O(m), so this also runs at a small budget.
+
+Test.check-prop "decode-round-trips-encode"
+  [r.string charset 8]
+  [
+    var [[s]
+      def bf ({n: 100, p: 0.05} Bloom.make end)
+      def _ (bf Bloom.add s end)
+      def back ((bf Bloom.encode end) Bloom.decode end)
+      def params-match ((back Bloom.params end) deq (bf Bloom.params end))
+      def added-match ((back "added" get) eq 1)
+      def still-contains (back Bloom.contains s end)
+      params-match and added-match and still-contains
+    ]
+  ]
+  5 1 0
+end
+
+
+# --- summary -------------------------------------------------------
+
+print "---"
+print "results:"
+def all-results (Test.results end)
+def _print-results (all-results each [
+  var [[r]
+    def nm (r "name" get)
+    def ok (r "ok" get)
+    def line (if ok [
+      `  pass: ${nm}`
+    ] [
+      `  FAIL: ${nm}  failing-input=${r "failing-input" get}`
+    ])
+    print line
+    0
+  ]
+])
+print "---"
+print "fail count: "
+print (Test.fail-count end)
+0 (Test.fail-count end) Assert.equal end
+print "all green"

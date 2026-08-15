@@ -1,0 +1,396 @@
+# bloom-filter: minimal probabilistic set membership in AQL.
+#
+# Public surface (the Bloom namespace exported at the bottom):
+#
+#   {n:Integer, p:Float} Bloom.make   → BloomFilter
+#   bf Bloom.add item                   → BloomFilter (mutated in place)
+#   bf Bloom.contains item              → Boolean
+#   bf Bloom.count                      → Integer  (cardinality estimate)
+#   bf Bloom.params                     → Map      ({n, p, m, k})
+#   bf Bloom.encode                     → String   (jsonic snapshot)
+#   text Bloom.decode                   → BloomFilter (rebuilt snapshot)
+#   a Bloom.merge b                     → BloomFilter (m and k must match)
+#
+# Failures raise coded errors (catch with `do […] error […]`, read
+# `e.code` / `e.message` in the handler):
+#
+#   bad_input           Bloom.make arguments missing or out of range
+#   incompatible_merge  Bloom.merge filters disagree on m or k
+#   bad_payload         Bloom.decode text is not an encode snapshot
+#
+# BloomFilter is a sealed `class` instance. Bit storage is a FlexList
+# of 63-bit integer words mutated in place.
+#
+# Calling convention: the receiver/data comes first, then the verb, then
+# any extra arguments, and the call is terminated with `end` (or wrapped
+# in parens) — `bf Bloom.add item end`. Without a terminator the verb
+# swallows the following token, giving a wrong result or a dispatch error.
+#
+# Imported via `import "./bloom.aql"`; the importing script need not
+# pre-import the `aql:*` utilities (math-util, array-util, bin-util,
+# struct-util) — this module imports them itself.
+
+
+import "boru:math-util"
+import "boru:array-util"
+import "boru:bin-util"
+import "boru:struct-util"
+
+
+# --- type -----------------------------------------------------------
+#
+# `bits` is declared as a required typed field, NOT a defaulted one:
+# a class field default is evaluated once, when the class is defined,
+# and that single value is shared by every instance — a mutable
+# default (a FlexList or other flex node) would silently alias all
+# filters together. Every constructor call passes a fresh FlexList
+# explicitly.
+
+def BloomFilter class {
+  n:     0
+  p:     0.0
+  m:     0
+  k:     0
+  added: 0
+  bits:  FlexList
+}
+
+
+# --- hashing --------------------------------------------------------
+#
+# Double hashing (Kirsch–Mitzenmacher): index_i = (h1 + i*h2) mod m.
+# h1 and h2 come from the native FNV-1a words in boru:bin-util — fnv32
+# for h1, the high half of fnv64 for h2 — so any string hashes
+# directly (no printable-ASCII alphabet table, as the pre-class
+# versions of this module needed). h2 is OR'd with 1 so it is always
+# odd, which keeps the probe sequence (h1 + i*h2) mod m covering all
+# residues. Both hashes are < 2^32 and k is small, so the index
+# arithmetic stays far below the Integer overflow boundary (overflow
+# is a hard error in aql, not a silent wrap).
+
+def hash1 fn [
+  [s:String] [Integer] [
+    s BinUtil.fnv32
+  ]
+]
+
+def hash2 fn [
+  [s:String] [Integer] [
+    ((s BinUtil.fnv64) BinUtil.extract 32 64) BinUtil.bor 1
+  ]
+]
+
+
+# --- bit storage ----------------------------------------------------
+#
+# Bits are packed into a FlexList of integer words, 63 bits per word —
+# bit 63 is the sign bit, and staying out of it keeps every word a
+# plain non-negative Integer. The FlexList is mutated in place; an
+# alias read out of bf.bits sees (and makes) the same writes as the
+# instance. Note `flex` ALIASES its input list (the retired `make
+# Array` copied) — safe here because the iota/each result is fresh.
+
+def bits-per-word 63
+
+def make-bits fn [
+  [m:Integer] [FlexList] [
+    def wc ((m add (bits-per-word sub 1)) div bits-per-word)
+    flex (iota wc each [drop 0])
+  ]
+]
+
+def bit-test fn [
+  [i:Integer bits:FlexList] [Boolean] [
+    (bits get (i div bits-per-word)) BinUtil.test (i mod bits-per-word)
+  ]
+]
+
+# In-place mark. Returns nothing — call it as a bare statement (and
+# never `def`-bind it: binding a void call is a loud error). FlexList
+# `set` mutates in place but RETURNS the list (unlike the retired
+# Array `set`, which returned nothing), so we `drop` the result here
+# to keep this word void.
+def bit-mark fn [
+  [i:Integer bits:FlexList] [] [
+    def wi (i div bits-per-word)
+    bits set (wi) ((bits get (wi)) BinUtil.set (i mod bits-per-word)) end drop
+  ]
+]
+
+
+# --- index derivation -----------------------------------------------
+
+def as-string fn [
+  [item:Any] [String] [
+    convert String item
+  ]
+]
+
+def indices-for fn [
+  [item:Any bf:BloomFilter] [List] [
+    def s (item as-string)
+    def h1 (s hash1)
+    def h2 (s hash2)
+    def m bf.m
+    def k bf.k
+    iota k each [
+      # (h1 + i*h2) mod m, written infix with i bound
+      var [[i] (i mul h2) add h1 mod m]
+    ]
+  ]
+]
+
+
+# --- constructor ----------------------------------------------------
+
+def derive-m fn [
+  [p:Float n:Integer] [Integer] [
+    def lnp (p MathUtil.log)
+    def ln2 (2 MathUtil.log)
+    def num (n MathUtil.negate convert Float mul lnp)
+    def den (ln2 mul ln2)
+    def raw (num div den)
+    raw MathUtil.ceil
+  ]
+]
+
+def derive-k fn [
+  [m:Integer n:Integer] [Integer] [
+    def ln2 (2 MathUtil.log)
+    def raw (m convert Float mul ln2 div n)
+    raw MathUtil.round
+  ]
+]
+
+# Arguments are validated up front with `raise` (code bad_input).
+# Style note: each raise message is bound with `def` first, and every
+# guard `if` carries an explicit empty else `[]`. Both were required
+# workarounds on builds before aql 7193a7d3 (raise didn't collect
+# template literals; an else-less `if` forward-collected the next
+# `def` statement — see dx-report.md); they're kept because they read
+# clearly and run correctly on older builds too.
+def make-bloom fn [
+  [opts:Options] [BloomFilter] [
+    def n-val (opts "n" get)
+    def p-val (opts "p" get)
+    if ((n-val is Integer) not) [
+      def msg `Bloom.make: n must be an Integer >= 1 (got ${n-val})`
+      raise bad_input msg
+    ] []
+    if ((n-val gte 1) not) [
+      def msg `Bloom.make: n must be >= 1 (got ${n-val})`
+      raise bad_input msg
+    ] []
+    if ((p-val is Float) not) [
+      def msg `Bloom.make: p must be a Float in (0, 0.5] (got ${p-val})`
+      raise bad_input msg
+    ] []
+    def p-ok ((p-val gt 0.0) and (p-val lte 0.5))
+    if (p-ok not) [
+      def msg `Bloom.make: p must be in (0, 0.5] (got ${p-val})`
+      raise bad_input msg
+    ] []
+    def m-val (derive-m p-val n-val)
+    def k-val (derive-k m-val n-val)
+    make BloomFilter {
+      n:     n-val
+      p:     p-val
+      m:     m-val
+      k:     k-val
+      added: 0
+      bits:  (make-bits m-val)
+    }
+  ]
+]
+
+
+# --- core operations ------------------------------------------------
+
+def bloom-add fn [
+  [item:Any bf:BloomFilter] [BloomFilter] [
+    def bits bf.bits
+    def _ ((bf indices-for item) each [
+      var [[idx]
+        bits bit-mark idx end
+        0
+      ]
+    ])
+    # The terminator here is load-bearing. `set` fills its receiver
+    # slot forward-first, so without `end`/`;` it grabs the next token
+    # (`bf`, a BloomFilter) as the receiver instead of the stack value.
+    # Same object here, so the result is identical — but keep it
+    # explicit so the receiver is unambiguous.
+    bf set added (bf.added add 1) end
+    bf
+  ]
+]
+
+def bloom-contains fn [
+  [item:Any bf:BloomFilter] [Boolean] [
+    def bits bf.bits
+    (bf indices-for item) each [
+      var [[idx] bits bit-test idx end]
+    ] all end
+  ]
+]
+
+
+# --- secondary operations -------------------------------------------
+
+# O(words) popcount — one native BinUtil.popcount per 63-bit word,
+# not a per-bit scan.
+def popcount fn [
+  [bf:BloomFilter] [Integer] [
+    # A FlexList satisfies List-shaped words directly; fold over it
+    # as-is (there is no `convert List` from FlexList).
+    def words bf.bits
+    0 words [var [[w acc] acc add (BinUtil.popcount w)]] fold
+  ]
+]
+
+# Swamidass–Baldi: n_est = -(m/k) * ln(1 - X/m). Branch on the
+# saturated case (every bit set) up front so we don't take log(0).
+#
+# `if` is invoked in its full-forward form `if cond [then] [else]`.
+# The all-forward and all-stack forms both select the right branch;
+# only the mixed `cond if [then] [else]` form picks the wrong one, so
+# we keep `if` and its operands on the same side.
+def bloom-count fn [
+  [bf:BloomFilter] [Integer] [
+    def x (bf popcount end)
+    def m bf.m
+    def k bf.k
+    def saturated (x eq m)
+    if saturated [bf.added] [
+      def md (m convert Float)
+      def kd (k convert Float)
+      def xd (x convert Float)
+      def ratio (md sub xd div md)
+      def lnr (ratio MathUtil.log)
+      def est (md MathUtil.negate div kd mul lnr)
+      est MathUtil.round
+    ]
+  ]
+]
+
+def bloom-params fn [
+  [bf:BloomFilter] [Map] [
+    do {n: [bf.n], p: [bf.p], m: [bf.m], k: [bf.k]}
+  ]
+]
+
+
+# Encode bf as a jsonic-style String: filter parameters plus a list
+# of the currently-set bit indices. Round-trips through Bloom.decode.
+def bloom-encode fn [
+  [bf:BloomFilter] [String] [
+    def bits bf.bits
+    def m    bf.m
+    def hits (iota m each [
+      var [[i] bits bit-test i end]
+    ])
+    def set-idxs (ArrayUtil.where hits end)
+    def payload (do {
+      n:     [bf.n]
+      p:     [bf.p]
+      m:     [bf.m]
+      k:     [bf.k]
+      added: [bf.added]
+      set:   [set-idxs]
+    })
+    `${payload}`
+  ]
+]
+
+# Rebuild a filter from a Bloom.encode snapshot. The payload's own m
+# and k are trusted (not re-derived from n and p) so old snapshots
+# survive changes to the sizing formulas. Reads are strict (`!.`) and
+# the whole rebuild is fenced: any malformation — unparseable text,
+# missing keys, mis-typed fields, out-of-range indices — re-raises as
+# one descriptive bad_payload error.
+def bloom-decode fn [
+  [text:String] [BloomFilter] [
+    def payload (do [StructUtil.parse text] error [
+      def msg `Bloom.decode: payload is not parseable jsonic`
+      raise bad_payload msg
+    ])
+    do [
+      def m-val (payload !. m)
+      def bf (make BloomFilter {
+        n:     (payload !. n)
+        p:     (payload !. p)
+        m:     m-val
+        k:     (payload !. k)
+        added: (payload !. added)
+        bits:  (make-bits m-val)
+      })
+      def bits bf.bits
+      def _ ((payload !. set) each [
+        var [[idx]
+          bits bit-mark idx end
+          0
+        ]
+      ])
+      bf
+    ] error [
+      def msg `Bloom.decode: payload is not a Bloom.encode snapshot (need integer n m k added, float p, index list set)`
+      raise bad_payload msg
+    ]
+  ]
+]
+
+
+# --- merge ----------------------------------------------------------
+
+# Merge requires both filters to share the same bit width (m) and
+# hash count (k) — the natural outcome of building them with the same
+# (n, p). On a mismatch we raise incompatible_merge. (`raise` landed
+# in aql after db828ec; the old idiom of signalling by dispatching a
+# descriptively-named undefined word is retired.) The union itself is
+# one word-wise OR per 63-bit word, not a per-bit walk.
+def bloom-merge fn [
+  [b:BloomFilter a:BloomFilter] [BloomFilter] [
+    if ((a.m eq b.m) not) [
+      def msg `Bloom.merge: filters disagree on m (${a.m} vs ${b.m}); build both with the same (n, p)`
+      raise incompatible_merge msg
+    ] []
+    if ((a.k eq b.k) not) [
+      def msg `Bloom.merge: filters disagree on k (${a.k} vs ${b.k}); build both with the same (n, p)`
+      raise incompatible_merge msg
+    ] []
+    def a-bits a.bits
+    def b-bits b.bits
+    def wc (a-bits size)
+    def _ (iota wc each [
+      var [[wi]
+        # FlexList set returns the list; drop it so the body yields
+        # exactly the 0 below.
+        a-bits set (wi) ((a-bits get (wi)) BinUtil.bor (b-bits get (wi))) end drop
+        0
+      ]
+    ])
+    # Load-bearing terminator (as in bloom-add): without it, `set`
+    # grabs the trailing `a` as its receiver via forward-first fill.
+    a set added (a.added add b.added) end
+    a
+  ]
+]
+
+
+# --- namespace ------------------------------------------------------
+#
+# Functions are exported with `/r` so the auto-evaluating map literal
+# doesn't dispatch them at construction time. Types and bare values go
+# in bare. See docs/reference.md §"Word modifiers".
+
+export "Bloom" {
+  BloomFilter
+  make:     make-bloom/r
+  add:      bloom-add/r
+  contains: bloom-contains/r
+  count:    bloom-count/r
+  params:   bloom-params/r
+  encode:   bloom-encode/r
+  decode:   bloom-decode/r
+  merge:    bloom-merge/r
+}

@@ -1,0 +1,168 @@
+# bloom-filter direct unit tests using boru:test's imperative API.
+#
+# The sibling file `test/bloom_unit_spec.aql` covers the same kind of
+# example-based checks through the declarative spec surface
+# (`Test.spec` / `Test.case` / `Test.run-spec`).
+#
+# Run:
+#   aql test/bloom_unit_test.aql
+
+
+import "boru:test" end
+import "./bloom.aql" end
+
+
+# --- derived params ------------------------------------------------
+
+[
+  def bf ({n: 1000, p: 0.01} Bloom.make end)
+  1000  bf.n  Assert.equal end
+  0.01  bf.p  Assert.equal end
+  9586  bf.m  Assert.equal end
+  7     bf.k  Assert.equal end
+] "derived-params" Test.test end
+
+
+# --- fresh filter contains nothing ---------------------------------
+
+[
+  def bf ({n: 1000, p: 0.01} Bloom.make end)
+  false (bf Bloom.contains "anything" end) Assert.equal end
+] "fresh-contains-nothing" Test.test end
+
+
+# --- add then contains ---------------------------------------------
+
+[
+  def bf ({n: 1000, p: 0.01} Bloom.make end)
+  def _ (bf Bloom.add "hello" end)
+  true  (bf Bloom.contains "hello" end) Assert.equal end
+  false (bf Bloom.contains "not-there" end) Assert.equal end
+] "add-then-contains" Test.test end
+
+
+# --- bulk-insert fixtures ------------------------------------------
+#
+# `_seen` is populated here at top level, then read only inside the
+# Test.test bodies below. It lives out here, not inside a block, for two
+# reasons:
+#   * `aql check` treats a code body (the `[...]` handed to each / fold /
+#     Test.test) as opaque, so it can't see the in-body uses; the leading
+#     underscore marks the def as body-only and skips check's unused_def
+#     false positive.
+#   * the bytecode compiler (`aql --compile`) drops a *block-local*
+#     binding referenced from an `each` body but keeps a top-level one, so
+#     building the fixture here keeps the interpreter and the compiler in
+#     agreement. See test/divergence/.
+
+def _seen ({n: 1000, p: 0.01} Bloom.make end)
+def _fill (iota 50 each [ var [[i] _seen Bloom.add (convert String i) end 0 ] ])
+
+
+# --- bulk-insert: every item is found ------------------------------
+
+[
+  def hits (iota 50 each [
+    var [[i] if (_seen Bloom.contains (convert String i) end) [1] [0] ]
+  ])
+  50 (0 hits [add end] fold) Assert.equal end
+] "bulk-add-all-found" Test.test end
+
+
+# --- count tracks the insertion count ------------------------------
+
+[
+  def cnt (_seen Bloom.count end)
+  true (45 lte cnt) Assert.equal end
+  true (cnt lte 55) Assert.equal end
+] "count-within-tolerance" Test.test end
+
+
+# --- params snapshot -----------------------------------------------
+
+[
+  def bf ({n: 1000, p: 0.01} Bloom.make end)
+  def ps (bf Bloom.params end)
+  1000  (ps "n" get) Assert.equal end
+  0.01  (ps "p" get) Assert.equal end
+  9586  (ps "m" get) Assert.equal end
+  7     (ps "k" get) Assert.equal end
+] "params-snapshot" Test.test end
+
+
+# --- merge: union of two filters with matching (m, k) --------------
+
+[
+  def a ({n: 1000, p: 0.01} Bloom.make end)
+  def b ({n: 1000, p: 0.01} Bloom.make end)
+  def _a (a Bloom.add "from-a" end)
+  def _b (b Bloom.add "from-b" end)
+  def merged (a Bloom.merge b end)
+  true (merged Bloom.contains "from-a" end) Assert.equal end
+  true (merged Bloom.contains "from-b" end) Assert.equal end
+] "merge-union" Test.test end
+
+
+# --- merge: mismatched (m, k) is rejected --------------------------
+
+[
+  def a ({n: 1000, p: 0.01} Bloom.make end)
+  def b ({n:  500, p: 0.01} Bloom.make end)
+  [a Bloom.merge b end] Assert.throws end
+] "merge-mismatch-throws" Test.test end
+
+
+# --- merge: the mismatch error carries a dispatchable code ----------
+
+[
+  def a ({n: 1000, p: 0.01} Bloom.make end)
+  def b ({n:  500, p: 0.01} Bloom.make end)
+  def e (do [a Bloom.merge b end])
+  incompatible_merge/q (e.code) Assert.equal end
+] "merge-mismatch-code" Test.test end
+
+
+# --- make: out-of-range arguments raise bad_input -------------------
+
+[
+  def e1 (do [{n: 0, p: 0.01} Bloom.make end])
+  bad_input/q (e1.code) Assert.equal end
+  def e2 (do [{n: 1000, p: 0.7} Bloom.make end])
+  bad_input/q (e2.code) Assert.equal end
+  def e3 (do [{n: 1000} Bloom.make end])
+  bad_input/q (e3.code) Assert.equal end
+] "make-validates-input" Test.test end
+
+
+# --- decode: rebuilds an encoded filter -----------------------------
+
+[
+  def bf ({n: 1000, p: 0.01} Bloom.make end)
+  def _h (bf Bloom.add "hello" end)
+  def _w (bf Bloom.add "world" end)
+  def back ((bf Bloom.encode end) Bloom.decode end)
+  true  (back Bloom.contains "hello" end) Assert.equal end
+  true  (back Bloom.contains "world" end) Assert.equal end
+  false (back Bloom.contains "absent" end) Assert.equal end
+  2 (back "added" get) Assert.equal end
+  true ((bf Bloom.params end) deq (back Bloom.params end)) Assert.equal end
+  (bf Bloom.encode end) (back Bloom.encode end) Assert.equal end
+] "decode-round-trips" Test.test end
+
+
+# --- decode: malformed payloads raise bad_payload --------------------
+
+[
+  def e1 (do ["this is not jsonic {" Bloom.decode end])
+  bad_payload/q (e1.code) Assert.equal end
+  def e2 (do ["{n:100, p:0.05}" Bloom.decode end])
+  bad_payload/q (e2.code) Assert.equal end
+] "decode-rejects-malformed" Test.test end
+
+
+# --- summary -------------------------------------------------------
+
+"---" print
+"fail count: " print Test.fail-count end print
+0 Test.fail-count end Assert.equal end
+"all green" print

@@ -1,0 +1,43 @@
+# Smoke test for the bloom-filter module. Imports the library and
+# walks through every public word — a successful end-to-end run (no
+# errors) is the pass condition.
+#
+# Prints are written one value per statement (`print (value) end`):
+# `print` collects a forward argument, so chained `"label" print
+# (value) print` pairs print in the wrong order.
+#
+# Run:
+#   aql test/bloom_smoke_test.aql
+
+import "./bloom.aql" end
+
+print ("--- bloom-filter smoke demo ---") end
+
+def bf ({n: 1000, p: 0.01} Bloom.make end)
+
+print (`params:   ${(bf Bloom.params end)}`) end
+
+def _add-hello (bf Bloom.add "hello" end)
+def _add-world (bf Bloom.add "world" end)
+
+print (`hello?:   ${(bf Bloom.contains "hello" end)}`) end
+print (`world?:   ${(bf Bloom.contains "world" end)}`) end
+print (`absent?:  ${(bf Bloom.contains "not-added" end)}`) end
+print (`count:    ${(bf Bloom.count end)}`) end
+
+def snapshot (bf Bloom.encode end)
+print (`encode:   ${snapshot}`) end
+
+# Decode rebuilds an equivalent filter from the snapshot text.
+def back (snapshot Bloom.decode end)
+print (`decoded-hello?: ${(back Bloom.contains "hello" end)}`) end
+print (`decoded-count:  ${(back Bloom.count end)}`) end
+
+# Merge into a second filter built with matching (n, p).
+def bf2 ({n: 1000, p: 0.01} Bloom.make end)
+def _add-fizz (bf2 Bloom.add "fizz" end)
+
+def merged (bf Bloom.merge bf2 end)
+print (`merged-hello?: ${(merged Bloom.contains "hello" end)}`) end
+print (`merged-fizz?:  ${(merged Bloom.contains "fizz" end)}`) end
+print (`merged-count:  ${(merged Bloom.count end)}`) end
