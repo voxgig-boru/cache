@@ -1,6 +1,6 @@
-name: bloom-filter
+name: cache
 major: 0
-minor: 2
+minor: 0
 patch: 0
-main: bloom.aql
-files: [bloom.aql]
+main: cache.aql
+files: [cache.aql]

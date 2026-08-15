@@ -29,11 +29,11 @@ never depends on whatever boru is on `PATH`), then prints a per-suite matrix:
 
 ```
   SUITE                         INTERPRETER   CHECK           BYTECODE
-  bloom_unit_test.aql           ok            ok              ok
-  bloom_unit_spec.aql           ok            ok              ok
-  bloom_prop_test.aql           ok            ok              ok
-  bloom_prop_spec.aql           ok            ok              ok
-  bloom_smoke_test.aql          ok            ok              ok
+  cache_unit_test.aql           ok            ok              ok
+  cache_unit_spec.aql           ok            ok              ok
+  cache_prop_test.aql           ok            ok              ok
+  cache_prop_spec.aql           ok            ok              ok
+  cache_smoke_test.aql          ok            ok              ok
 ```
 
 It exits non-zero on any interpreter failure, any check **error**, or any
@@ -45,10 +45,11 @@ one-time build (cached in `~/.cache/aql-divergence`).
 `boru --compile` is documented to return results identical to the interpreter
 (it falls back to the interpreter for anything it can't lower). This harness
 exists because that promise has been broken before, and broke again twice on
-`main` (the regressions in `../../boru-backend-report.md`).
+`main` (the regressions recorded in that project).
 
-The original divergence this guard caught: a compiled `each` body **dropped a
-block-local binding** from the enclosing block —
+The original divergence this guard caught (in the sibling `bloom-filter`
+project, from which this repository was templated): a compiled `each` body
+**dropped a block-local binding** from the enclosing block —
 
 ```boru
 import "boru:test" end
@@ -64,7 +65,7 @@ import "./bloom.aql" end
 
 — so `bf Bloom.add …` raised `undefined word: bf` and, because the emitter
 believed it could lower the body, `--compile` did **not** fall back and the
-wrong result escaped. `test/bloom_unit_test.aql` was restructured to build
+wrong result escaped. That project's unit suite was restructured to build
 its bulk fixture (`_seen`) at **top level** instead of inside the `Test.test`
 block, which both keeps it in scope for the compiler and (the underscore)
 skips `boru check`'s unused_def false positive for body-only defs.
@@ -74,9 +75,9 @@ repro above is now byte-identical between interpreter and `--compile`, and
 all five suites are clean across all three surfaces. The `_seen` fixture is
 kept anyway — it's harmless and keeps the suite robust on older builds. This
 harness stays as the regression guard (it has already caught two transient
-`main` regressions; see `../../boru-backend-report.md`).
+`main` regressions).
 
-`--force-compile` now fully compiles `bloom_prop_test.aql`; the rest refuse
+`--force-compile` now fully compiles `cache_prop_test.aql`; the rest refuse
 on code-body words (`each` / `do` / `test-test`, "Stage 2") and fall back
 cleanly under `--compile` — sound by `boru-lang/boru`'s
 `design/COMPILABLE-SUBSET.md` ("refusal is always sound; the worst failure

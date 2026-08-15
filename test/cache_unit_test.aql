@@ -1,0 +1,19 @@
+# cache — unit_test suite.
+#
+# PLACEHOLDER. The library is designed but not implemented (see
+# DESIGN.md), so there is nothing to assert yet. The file holds the
+# naming convention and keeps CI green; add real cases alongside the
+# first implemented word.
+#
+# Run:
+#   boru test/cache_unit_test.aql
+
+import "boru:test" end
+import "./cache.aql" end
+
+# --- summary -------------------------------------------------------
+
+"---" print
+"fail count: " print Test.fail-count end print
+0 Test.fail-count end Assert.equal end
+"all green" print

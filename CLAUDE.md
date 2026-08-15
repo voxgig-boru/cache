@@ -1,34 +1,44 @@
 # CLAUDE.md
 
-This repository is the `Bloom` bloom-filter library, written in boru.
+This repository is the `Cache` bounded-caching library, written in boru.
 
-## Using the library
+## Status — designed, not implemented
 
-See @AGENTS.md for how to call the `Bloom` API correctly from boru — the
-calling convention, the full API, copy-paste idioms, and the common
-mistakes to avoid. Every example there is verified against the pinned
-`boru` build.
+`cache.aql` exports an **empty** `Cache` namespace; the five suites are
+green placeholders. There is no API to call yet.
+
+**@DESIGN.md is the substance of this repository right now.** Read it
+before adding anything. Three of its rulings are easy to undo by
+accident:
+
+- **This is an effect memoizer, not a general-purpose cache.** A map read
+  costs ~63µs, so caching anything cheaper than that is a net loss. The
+  break-even governs the whole API.
+- **Default eviction is SIEVE, not LRU.** A textbook LRU needs a
+  doubly-linked list, which boru cannot express well (cyclic flex
+  references break `jsonify` and risk `deq` recursion). CLOCK/SIEVE need
+  only an array and a hand — and beat LRU on hit rate anyway.
+- **The library never reads the clock.** `clock` is a gated policy scope;
+  TTL takes `now` as a parameter so the core stays zero-capability and
+  deterministic under property tests.
+
+`Cache.memoize` is deliberately absent: it would pass a function across a
+module boundary, which is the defect recorded in boru's
+`design/FUNCTION-VALUE-SCOPE.0.md` (the callee's free words resolve in
+the running module, so a memoized function can silently bind *this*
+library's helpers). It lands when that doc's phase 1 does.
 
 ## Working on this repository
 
-- A SessionStart hook (`.claude/settings.json` →
-  `.claude/hooks/session-start.sh`) builds `boru` from the pinned commit in
-  remote sessions, so a fresh session can run the suites. Locally, build it
-  once from source (there is no tagged release and `go install …/aql@latest`
-  is blocked by replace directives) — see
-  [docs/how-to.md](docs/how-to.md#install-and-run-aql).
-- Tests live in `test/`, named `<subject>_<unit|prop>_<test|spec>.aql` plus a
-  `bloom_smoke_test.aql`: `_test` = imperative (`Test.test`/`Test.check-prop`),
-  `_spec` = declarative spec; `unit` = example-based, `prop` = property-based.
-  Each assertion-bearing suite ends by asserting `Test.fail-count` is `0` and
-  prints `all green`.
-- `test/divergence/run.sh` runs every suite through all three boru surfaces —
-  interpreter, `boru check`, and the byte compiler (`boru --compile`) — and
-  asserts none errors or disagrees. It builds a newer boru than this module's
-  pin, since the `--compile` CLI postdates it. See its `README.md`; the
-  byte-compiler bug it guards against is `dx-report.md` §3.
-- Known boru-runtime gotchas observed with the pinned build are in
-  `dx-report.md`. The pinned boru commit is single-sourced in the CI workflow's
-  `BORU_REF` (`.github/workflows/test.yml`); a CI `consistency` job fails if the
-  hook, `test/divergence/run.sh`, or `api.json` drift from it.
-- Forking this repo to start a new boru library? See `TEMPLATE.md`.
+- A SessionStart hook builds `boru` in remote sessions so a fresh session
+  can run the suites.
+- The whole library is one file, `cache.aql`, exporting the single
+  `Cache` namespace.
+- Tests live in `test/`, named `cache_<unit|prop>_<test|spec>.aql` plus a
+  `cache_smoke_test.aql`. Each assertion-bearing suite ends by asserting
+  `Test.fail-count` is `0` and prints `all green`.
+- The planned keystone property is the **eviction contract**: `size`
+  never exceeds `capacity`, and every policy agrees with a naive
+  list-based reference implementation on which keys survived.
+- Instantiated from the `bloom-filter` template; scaffolding renamed, no
+  bloom logic or documentation carried across.

@@ -59,9 +59,9 @@ fi
 
 # Fast confidence check: run the smoke test if boru is usable. Never fail the
 # session on a check error.
-if [ -x "$BORU" ] && [ -f "$CLAUDE_PROJECT_DIR/test/bloom_smoke_test.aql" ]; then
-  if ( cd "$CLAUDE_PROJECT_DIR" && "$BORU" test/bloom_smoke_test.aql >/dev/null 2>&1 ); then
-    log "Smoke check passed (boru test/bloom_smoke_test.aql)."
+if [ -x "$BORU" ] && [ -f "$CLAUDE_PROJECT_DIR/test/cache_smoke_test.aql" ]; then
+  if ( cd "$CLAUDE_PROJECT_DIR" && "$BORU" test/cache_smoke_test.aql >/dev/null 2>&1 ); then
+    log "Smoke check passed (boru test/cache_smoke_test.aql)."
   else
     log "NOTE: smoke check did not pass; toolchain may be incomplete."
   fi

@@ -1,0 +1,18 @@
+{
+  "name": "cache-aql",
+  "description": "Agent guidance for calling the Cache bounded-caching library correctly from boru: the calling convention, the eviction-policy API, and the break-even that decides whether a cache helps at all. DESIGNED but NOT YET IMPLEMENTED \u2014 see DESIGN.md.",
+  "version": "0.1.0",
+  "author": {
+    "name": "voxgig-boru"
+  },
+  "homepage": "https://github.com/voxgig-boru/cache",
+  "repository": "https://github.com/voxgig-boru/cache",
+  "license": "MIT",
+  "keywords": [
+    "boru",
+    "cache",
+    "eviction",
+    "skill",
+    "agent"
+  ]
+}

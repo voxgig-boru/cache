@@ -1,0 +1,32 @@
+# cache: bounded caching with pluggable eviction, in boru.
+#
+# STATUS — DESIGNED, NOT IMPLEMENTED.
+#
+# This module is a scaffold. The `Cache` namespace exported at the bottom
+# is deliberately EMPTY. The argued design — what this library is (an
+# EFFECT MEMOIZER, not a general-purpose cache), the measurement that
+# decides that, the eviction policy roster, and the boru constraints that
+# force each shape — lives in DESIGN.md at the repository root. Read it
+# before adding anything here.
+#
+# The headline finding, because it governs every later choice: a map read
+# costs ~63us on this runtime and a write ~3us, both O(1). A cache is only
+# worth installing over work that costs substantially more than a lookup,
+# so this library targets expensive EFFECTS (network, file, heavy parse)
+# and explicitly not cheap pure computation, where it would be a net loss.
+#
+# --- representation ---
+#
+# Not yet fixed. DESIGN.md sections 5 and 9 record the candidate shape: a
+# `flex` entry map plus an append-only `flex` ring and an integer hand
+# (what CLOCK and SIEVE want), rather than the doubly-linked list a
+# textbook LRU needs and boru cannot express well.
+#
+# Calling convention: forward args, receiver (the cache) LAST —
+# `Cache.verb ...args c`, with the piping form `c Cache.verb ...args end`
+# equally valid. Fixed now so the design cannot drift from it.
+#
+# Imported via `import "./cache.aql"`.
+
+export "Cache" {
+}

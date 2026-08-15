@@ -25,7 +25,7 @@ set -uo pipefail
 
 # boru-lang/boru @ main, 2026-06-24 (PR #182, claude/aql-client-issues-6b8new) —
 # the same commit the library now pins. It fixes the two regressions this
-# library's aql-backend-report.md flagged — the None/type-literal
+# sibling bloom-filter library's backend report flagged — the None/type-literal
 # template-interpolation break (f247557) and the `convert` return-type /
 # fold-carrier `no_signature` check false positives (f247557 / fc47452) — plus
 # OpInterp (1b7b9ae) and gradual-Any. All five suites interpret, check (0
@@ -40,11 +40,11 @@ CACHE="$HOME/.cache/aql-divergence"
 AQL="$CACHE/aql-$AQL_BYTECODE_REF"
 
 SUITES="
-test/bloom_unit_test.aql
-test/bloom_unit_spec.aql
-test/bloom_prop_test.aql
-test/bloom_prop_spec.aql
-test/bloom_smoke_test.aql
+test/cache_unit_test.aql
+test/cache_unit_spec.aql
+test/cache_prop_test.aql
+test/cache_prop_spec.aql
+test/cache_smoke_test.aql
 "
 
 log() { echo "[divergence] $*"; }
