@@ -157,21 +157,42 @@ stated in the same terms.
 The obvious headline word is `Cache.memoize f c` — wrap a function, cache
 its results. **It cannot be built correctly today.**
 
-Passing a function across a module boundary and invoking it there is
+> **UNBLOCKED 2026-08-15.** This section's blocker was boru's
+> function-value scope defect, and it named its own release condition:
+> *"`memoize` lands when that doc's phase 1 (the native-callback seam)
+> does."* Phase 1 has landed (boru `7e98aeb`), so the technical obstacle
+> is gone. What remains is a scope decision, not a constraint — see the
+> revised ruling below.
+
+Passing a function across a module boundary and invoking it there **was**
 exactly the defect recorded in boru's `design/FUNCTION-VALUE-SCOPE.0.md`:
-the interpreter resolves the function's free words in the **running**
-module, so a memoized function loses access to its own module's helpers —
-or, worse, silently binds a same-named word inside this library and
-returns a plausible wrong value, with `boru check` reporting nothing.
+the interpreter resolved the function's free words in the **running**
+module, so a memoized function lost access to its own module's helpers —
+or, worse, silently bound a same-named word inside this library and
+returned a plausible wrong value, with `boru check` reporting nothing.
 
 Concretely: if this library had a private helper named `hash`, and a
-caller memoized a function that called *their* `hash`, they would get
-ours.
+caller memoized a function that called *their* `hash`, they got ours.
 
-**Ruling: no `memoize` in v1.** The eviction core takes data, not
-functions, and is unaffected — build that first. `memoize` lands when
-that doc's phase 1 (the native-callback seam) does, and until then the
-README should say why rather than leaving a conspicuous gap unexplained.
+**That is fixed.** A function value now resolves its free words in the
+module that *defined* it, on both engines, and specifically through the
+native-callback seam a `memoize` implementation would use
+(`core.InvokeCallbackFn` / `core.CallBoruFn`). A caller's `hash` and this
+library's `hash` no longer collide.
+
+**Revised ruling: `memoize` is no longer blocked; whether it belongs in
+v1 is an ordinary scope call.** The eviction core still takes data, not
+functions, and is still the thing to build first — that ordering was
+never about the defect. Two notes for whoever picks `memoize` up:
+
+- **Key derivation is the real design problem**, and always was. It was
+  simply hidden behind the scope blocker. Arguments must be reduced to a
+  map-legal key (String/Atom), which for structured arguments means a
+  canonical rendering — see boru's ADR-015 (`canon` always round-trips).
+- **Captures are snapshots, not cells** (`FUNCTION-VALUE-SCOPE.0.md` §11
+  rule 2, still design-only). A memoized closure sees its captured values
+  as they were at construction, which is usually what you want from a
+  cache, but it should be documented rather than discovered.
 
 ## 8. Statistics are not optional here
 
