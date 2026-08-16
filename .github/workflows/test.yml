@@ -1,6 +1,6 @@
 name: tests
 
-# The bloom-filter module is written in boru, so CI builds the `boru`
+# The cache module is written in boru, so CI builds the `boru`
 # interpreter from source before it can run anything. This library TRACKS
 # boru-lang/boru MAIN: every run resolves main's current HEAD and builds that
 # commit (the binary is cached by the resolved SHA, so it only rebuilds when
@@ -18,7 +18,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out bloom-filter
+      - name: Check out cache
         uses: actions/checkout@v4
 
       - name: Set up Go
@@ -68,23 +68,23 @@ jobs:
       # Each suite ends with `0 test.fail-count end assert.equal`, so a
       # failure makes boru exit non-zero and fails the step.
       - name: Unit tests (direct)
-        run: boru test/bloom_unit_test.aql
+        run: boru test/cache_unit_test.aql
 
       - name: Unit tests (spec format)
-        run: boru test/bloom_unit_spec.aql
+        run: boru test/cache_unit_spec.aql
 
       - name: Property tests (direct)
-        run: boru test/bloom_prop_test.aql
+        run: boru test/cache_prop_test.aql
 
       - name: Property tests (spec format)
-        run: boru test/bloom_prop_spec.aql
+        run: boru test/cache_prop_spec.aql
 
       - name: Smoke test
-        run: boru test/bloom_smoke_test.aql
+        run: boru test/cache_smoke_test.aql
 
-      # Advisory static check — NOT a gate. Checking bloom.aql ALONE still
+      # Advisory static check — NOT a gate. Checking cache.aql ALONE still
       # surfaces false `unused_def`/`no_signature` diagnostics: the library
-      # exports its words by reference (`make-bloom/r`, …) so the checker
+      # exports its words by reference (`name/r`, …) so the checker
       # treats the export map as a non-use site and analyses each word body
       # without caller types. (Checked THROUGH a suite — where the words are
       # called with concrete types — `boru check` is clean; the gating
@@ -92,7 +92,7 @@ jobs:
       # `continue-on-error` so the diagnostics surface without failing the build.
       - name: Static check (advisory, non-gating)
         continue-on-error: true
-        run: boru check --soft bloom.aql
+        run: boru check --soft cache.aql
 
   # Gating three-surface guard: every suite must interpret, `boru check` with
   # zero errors, AND match under the byte compiler (`boru --compile`). run.sh
@@ -101,7 +101,7 @@ jobs:
   divergence:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out bloom-filter
+      - name: Check out cache
         uses: actions/checkout@v4
 
       - name: Set up Go
@@ -118,13 +118,13 @@ jobs:
   consistency:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out bloom-filter
+      - name: Check out cache
         uses: actions/checkout@v4
 
       - name: SKILL.md copies are in sync
         run: |
-          canonical=.claude/skills/bloom-filter-aql/SKILL.md
-          bundled=plugins/bloom-filter-aql/skills/bloom-filter-aql/SKILL.md
+          canonical=.claude/skills/cache-aql/SKILL.md
+          bundled=plugins/cache-aql/skills/cache-aql/SKILL.md
           if ! diff -u "$canonical" "$bundled"; then
             echo "::error file=$bundled::Plugin skill has drifted from $canonical"
             echo "Fix by copying the canonical skill over the bundled one:"
@@ -136,7 +136,7 @@ jobs:
       - name: JSON manifests are valid
         run: |
           for j in .claude-plugin/marketplace.json \
-                   plugins/bloom-filter-aql/.claude-plugin/plugin.json \
+                   plugins/cache-aql/.claude-plugin/plugin.json \
                    api.json; do
             if python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$j"; then
               echo "ok: $j"

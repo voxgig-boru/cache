@@ -1,0 +1,14 @@
+# cache — end-to-end smoke run over every public word.
+#
+# PLACEHOLDER. The library is designed but not implemented (see
+# DESIGN.md); the Cache namespace is empty, so this suite only proves the
+# module imports cleanly. Pass = no error.
+#
+# Run:
+#   boru test/cache_smoke_test.aql
+
+import "./cache.aql" end
+
+print ("--- cache smoke demo ---") end
+print ("Cache namespace is empty: designed, not implemented (see DESIGN.md)") end
+print ("--- ok ---") end

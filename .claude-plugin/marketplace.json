@@ -4,9 +4,9 @@
   "description": "Plugins for the voxgig AQL ecosystem.",
   "plugins": [
     {
-      "name": "bloom-filter-aql",
-      "source": "./plugins/bloom-filter-aql",
-      "description": "Agent guidance for using the Bloom bloom-filter library from AQL.",
+      "name": "cache-aql",
+      "source": "./plugins/cache-aql",
+      "description": "Agent guidance for using the Cache bounded-caching library from boru.",
       "version": "0.1.0",
       "license": "MIT"
     }
