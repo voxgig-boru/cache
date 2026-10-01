@@ -8,12 +8,18 @@
 # Run:
 #   boru test/cache_unit_test.aql
 
-import "boru:test" end
-import "./cache.aql" end
+# The library is imported BEFORE boru:test on purpose: on boru main @
+# 64c5ab2, boru:test mints its record types from a fresh type-ID counter, so
+# a library class imported after it can collide with one of them and fail
+# its own return-type check ("expected X, got X"). See dx-report.md.
+import "../cache.aql"
+import "boru:test"
 
 # --- summary -------------------------------------------------------
 
-"---" print
-"fail count: " print Test.fail-count end print
-0 Test.fail-count end Assert.equal end
-"all green" print
+# One value per `print (…)` statement: a postfix `"x" print` chain collects
+# forward and prints out of order.
+print ("---")
+print (`fail count: ${(Test.fail-count)}`)
+Assert.equal 0 (Test.fail-count)
+print ("all green")
