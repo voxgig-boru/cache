@@ -81,10 +81,12 @@ to type its exports; expected, not a defect).
   check degrades the import to an opaque module and the compile pass then
   fails with `[boru/compile_failed] … residual value of unknown provenance`
   and no source position (see `dx-report.md`).
-- **The library is imported before `boru:test`.** `boru:test` mints its record
-  types from a fresh type-ID counter, so a library class imported after it can
-  collide with one of them (`expected X, got X`). There is no class yet, but
-  the order is fixed now so the first implemented word does not trip it.
+- **The library is imported before `boru:test`**, the order the sibling
+  bloom-filter / stats suites need. `boru:test` mints its record types from a
+  fresh type-ID counter, so a library class can collide with one of them
+  (`expected X, got X`). There is no class here yet; note that the order alone
+  is not a guaranteed fix — whether a class collides depends on the type ID it
+  lands on (see `dx-report.md`).
 - **The summary prints one value per statement** (`print ("…")`) and asserts
   with the forward `Assert.equal 0 (Test.fail-count)` (expected first): a
   postfix `"x" print` chain collects forward and prints out of order.

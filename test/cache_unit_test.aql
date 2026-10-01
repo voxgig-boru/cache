@@ -8,10 +8,12 @@
 # Run:
 #   boru test/cache_unit_test.aql
 
-# The library is imported BEFORE boru:test on purpose: on boru main @
-# 64c5ab2, boru:test mints its record types from a fresh type-ID counter, so
-# a library class imported after it can collide with one of them and fail
-# its own return-type check ("expected X, got X"). See dx-report.md.
+# The library is imported before boru:test — the order the sibling
+# bloom-filter / stats suites need. On boru main @ 64c5ab2 boru:test mints
+# its record types from a fresh type-ID counter, so a library class can
+# collide with one of them and fail its own return-type check ("expected X,
+# got X"); whether it does depends on the type ID the class lands on, not
+# only on import order. See dx-report.md.
 import "../cache.aql"
 import "boru:test"
 
