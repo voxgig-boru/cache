@@ -5,6 +5,20 @@
 > document is the argued plan — and, unusually, it argues first about
 > *whether* and *what*, because a measurement taken before writing it
 > changes what this library should be.
+>
+> **Re-verified against boru main @ `64c5ab2` (2026-10-01).** Every claim
+> below that cites boru behaviour was re-run on main, where a program is
+> compiled to bytecode and run on the VM — the only execution path since
+> 2026-09-19. The original text stands; dated **Note (2026-10-01)** blocks
+> mark where main differs. The one that matters most: **a map read is no
+> longer ~63µs but ~1–3µs, and a whole cache-shaped lookup ~10µs** (§2,
+> Appendix), which moves the break-even rows 1–2 rest on. Also changed:
+> `memoize` is unblocked (§7), `while` exists and `min`/`max` are not
+> reserved (§9), cyclic `flex` references now crash the process outright
+> (§5), and the `clock` scope's own gate does not stop `TimeUtil.now` —
+> the import gate does (§6). Still true: quadratic immutable-Map
+> accumulation, the `make Store` refusal, String/Atom-only keys,
+> two-value `pop`/`shift` with an O(n) `shift`, eager `and`/`or`.
 
 This repository was instantiated from the `bloom-filter` template. The
 scaffolding has been renamed for `cache`; none of the bloom filter's
@@ -24,6 +38,16 @@ logic, tests or documentation was carried across.
 | 6 | Storage | `flex` map + a `flex` list ring | Measured O(1); immutable Map accumulation is quadratic |
 | 7 | Keys | **Strings** | boru map keys are String/Atom only |
 | 8 | Statistics | Ship hit/miss/eviction counters from day one | Without a hit rate the user cannot tell whether the cache is helping or hurting — which, per #1, it may well be |
+
+> **Note (2026-10-01, boru main @ `64c5ab2`).** Rows 1–2 rest on the
+> ~63µs read, measured on the interpreter. Compiled on main a map read is
+> ~1–3µs and a cache-shaped lookup (a fn call, a hit-counter bump and the
+> entry read) ~8–13µs net (§2 note), so the break-even is roughly **ten
+> microseconds of work, not 63**. Cheap arithmetic is still a loss, but
+> moderately priced pure computation now pays — the "effect memoizer"
+> framing has become a scope choice rather than something the runtime
+> forces (§11 Q5). Row 4's reason is refined in §6, row 5 is lifted (§7),
+> and row 6's quadratic-Map premise was re-measured and still holds (§9).
 
 ---
 
@@ -73,6 +97,32 @@ of implementation, and belongs Go-side as a `boru:cache` native module.
 The engine already carries `dispatchCache`, `macroCache` and `enginePool`
 internally for exactly this reason. That is a different project; this
 document does not pursue it.
+
+> **Note (2026-10-01, boru main @ `64c5ab2`) — the measurement, redone.**
+> "Interpreter path" and "`each` bodies refuse compilation" are both gone:
+> since 2026-09-19 every program compiles to bytecode or fails, and the
+> loops below compiled with no runtime-constructed callbacks
+> (`boru -compile-report`). Re-measured with
+> [`bench/map_cost.aql`](bench/map_cost.aql) plus an n-sweep (Appendix),
+> on a 4-CPU container shared with other jobs, so treat the figures as
+> ±50%:
+>
+> | Operation | Cost on main, net of the bare loop | Was |
+> |---|---|---|
+> | `flex` map **write** (`set (k)`) | **~2–4 µs** | ~3.2 µs |
+> | map **read** (`get (k)`), flex or plain | **~1–2.5 µs** | ~63 µs |
+> | `has (k)` | **~1–3 µs** (≈ a read) | ~63 µs |
+> | a cache-shaped lookup fn (call + counter read/write + entry read) | **~8–13 µs** | — |
+>
+> All flat from n=10,000 to 40,000 (O(1)). The read/write asymmetry the
+> Appendix flagged is gone — reads are now no dearer than writes — so
+> whatever made reads ~20× writes was fixed upstream. The break-even
+> table above therefore shifts down by roughly an order of magnitude: the
+> verdict line becomes *cheap pure computation, under ~10µs*, and
+> "non-trivial boru computation" (tens of µs and up) is a clear win. The
+> argument for `Cache.stats` (§8) is unchanged — a cache can still make a
+> program slower — but the "this is not a cache library" conclusion no
+> longer follows from the numbers alone (§11 Q5).
 
 ## 3. Why a separate library
 
@@ -136,6 +186,14 @@ frequency sketch, which is the sibling `bloom-filter` repo's
 neighbourhood (a Count-Min Sketch), and they are a second-order win once
 a bounded store exists.
 
+> **Note (2026-10-01, boru main @ `64c5ab2`).** Worse than "break
+> `jsonify` and risk recursion in `deq`": a cyclic `flex` structure kills
+> the process. `print`, `StructUtil.jsonify` and `deq` (even `a deq a`)
+> over a self- or mutually-referencing flex node all die with the Go
+> runtime's `fatal error: stack overflow` (exit 2), which `do […] error
+> […]` cannot catch. Building the cycle is fine; touching it whole is not.
+> The ruling stands, more firmly: no node links, index links only.
+
 ## 6. Time: take it, don't read it
 
 TTL is the most-requested cache feature and the one that would quietly
@@ -148,9 +206,30 @@ supplies the timestamp: `Cache.put-at now key value c` /
 `Cache.get-at now key c`. The core stays pure, testable without a clock,
 and deterministic under property testing.
 
+> **Note (2026-10-01, boru main @ `64c5ab2`).** The mechanism is not the
+> one described above. The `clock` policy scope's own gate does not stop
+> `TimeUtil.now`: under `-deny-global clock`, or a profile with
+> `scopes: {clock: {install: false}}`, it still returns the wall clock
+> (the time module falls back to the wall clock when no clock capability
+> is installed — recorded in `dx-report.md` as an upstream defect). What
+> does refuse it is the **module-import gate**: the built-in `gen`
+> profile, for one, denies `import "boru:time-util"` itself
+> (`permission_denied: modules.import`), so a library that imports the
+> time module fails to load at all there. The ruling stands for the same
+> end reason — reading the clock costs the library its zero-capability
+> posture — and for determinism under property tests.
+
 This is the same ruling the sibling `sort` library needs for `shuffle` —
 boru has no ambient randomness, so a seed is passed in — and it should be
 stated in the same terms.
+
+> **Note (2026-10-01, boru main @ `64c5ab2`).** "No ambient randomness"
+> is not accurate: `boru:rand` (`Rand.int lo hi`, `Rand.float`, …) draws
+> from a time-seeded generator — three runs of `Rand.int 0 1000000` give
+> three values, the `-s` flag does not fix them, and the `gen` profile
+> allows the import. `Rand.with-seed` is the deterministic form. Passing a
+> seed in is still the right ruling, for the determinism reason, not
+> because boru forces it.
 
 ## 7. Memoization is blocked, and by what
 
@@ -179,6 +258,17 @@ module that *defined* it, on both engines, and specifically through the
 native-callback seam a `memoize` implementation would use
 (`core.InvokeCallbackFn` / `core.CallBoruFn`). A caller's `hash` and this
 library's `hash` no longer collide.
+
+> **Note (2026-10-01, boru main @ `64c5ab2`).** Re-verified: module A's
+> function value calling A's private `secret`, handed as `A.h/v` to module
+> B (which has its own `secret`) and applied there — directly and through
+> a native `each` callback — runs **A's** `secret`; a caller-defined
+> function calling the caller's own helper also resolves inside B. "Both
+> engines" is now one: there is only the compiled path. `core.CallBoruFn`
+> was retired (boru `b85cfc4e0`, 2026-08-28); `core.InvokeCallbackFn` is
+> the seam. A function passed as data must be written `f/v` — a bare name
+> holding a function **calls** wherever it appears (ADR-011; `/r` was
+> renamed `/v` on 2026-08-19 and `/r` is now `undefined_word`).
 
 **Revised ruling: `memoize` is no longer blocked; whether it belongs in
 v1 is an ordinary scope call.** The eviction core still takes data, not
@@ -227,6 +317,60 @@ Carried from measurements taken across this ecosystem; all apply here.
   `find`, `list`, `min`, `max`, `range`. Free and idiomatic here: `ent`,
   `ring`, `hand`, `cap`, `hits`, `misses`, `victim`, `slot`, `ks`.
 
+> **Note (2026-10-01, boru main @ `64c5ab2`) — each bullet re-run.**
+>
+> - **`flex`:** still required. Accumulating n keys into an immutable Map
+>   with a copy-returning `set` in a `fold` is still quadratic — ~0.3 s at
+>   n=1,000, ~1.0 s at 2,000, ~4.7 s at 4,000, ~11–17 s at 8,000 — against
+>   ~5→25 ms for a `flex` map (several hundred × at n=8,000). `node`
+>   converts a flex map to a plain one as described.
+> - **`Store`:** confirmed — `make Store` raises
+>   `[boru/unsupported]: make: unsupported target type Store`; `Set` is
+>   an undefined word. A Map to `true` is still the idiom.
+> - **`pop` / `shift`:** both still return two values (the list, then the
+>   element on top), and `shift` is O(n): draining a 10,000-element flex
+>   list takes ~5 s with `shift` vs ~25 ms with `pop` (20,000: ~20 s vs
+>   ~40 ms). The old "residual shape beyond Stage 1" refusal no longer
+>   exists; what compiles now is shape-dependent. Fully consumed shapes
+>   compile (`pop q drop` to shrink a flex list; `pop xs var [[a b] a]`
+>   over a **List** inside a fn), but keeping the element of a **flex**
+>   list's `pop`/`shift` hits three compiler defects (`dx-report.md`).
+>   The ring design — index reads/writes plus an integer hand — needs
+>   neither, and `q get i` / `q set i v` / `pop q drop` all compile.
+> - **Keys:** confirmed String/Atom only (`set` with an Integer key on a
+>   map is a `no_signature` check error); a String and an Atom of the same
+>   text share one slot. New trap for a cache, whose keys are always
+>   computed: **`set` quotes a bare word** — `ent set key v` stores under
+>   the literal key `"key"` — so write `ent set (key) v`; `get` and `has`
+>   evaluate their key (boru NUR040, Allowed).
+> - **Loops:** `while [cond] [body]` **exists** since boru 2026-08-21
+>   (`99fc2c3ec`) and compiles inside a fn. A `for` body's per-iteration
+>   values stay on the stack (collect them with `[for n [...]]`), so
+>   inside a fn they count toward the declared return arity — net zero
+>   unless collected. An `each` body must leave **at least** one value
+>   (zero is a runtime `each_error`); with more than one, the top value
+>   is kept. `for-each` is the no-result side-effect loop.
+> - **`and` / `or`:** they select an operand (`0 and 5` → `0`,
+>   `none or 7` → `7`) and the upstream docs call that "short-circuit",
+>   but **both operand expressions are always evaluated** — a right-hand
+>   side with an effect runs even when the left decides
+>   (`design/TRUTHINESS.0.md` §5). "Nest `if`" stands.
+> - **Reserved names:** `keys`, `vals`, `has`, `node`, `stack`, `depth`,
+>   `find`, `list`, `range` are still `[boru/reserved_word]`; **`min` and
+>   `max` are not** (they are `MathUtil.min`/`max`, free as bindings even
+>   with `boru:math-util` imported). Also reserved and tempting in this
+>   library: `size`, `get`, `set`, `del`, `push`, `pop`, `shift`, `each`,
+>   `fold`, `filter`, `sort`, `reverse`, `dup`, `drop`, `swap`, `over`,
+>   `rot`, `pick`, `valof`, `base`; `take` cannot be a fn name either (a
+>   core word, `extend_owner`). Every listed free name is still free, as
+>   are `count`, `put`, `delete`, `clear`, `peek`, `stats`, `capacity`,
+>   `policy`, `key`, `val`, `entry`, `hit`, `miss`, `evict`, `now`.
+> - **New — the step budget.** A run's total evaluation steps are capped
+>   at 10,000,000 by default (`[boru/evaluation_limit]`; raise with
+>   `boru -options steps:N`). A `for` body that updates a flex cell costs
+>   over ten steps per iteration, so one run gets well under a million
+>   such iterations — relevant to a cache inside a long-running loop.
+
 ## 10. Testing
 
 The keystone is **the eviction contract**: after `capacity + k` distinct
@@ -260,6 +404,13 @@ correct, and it is what makes a subtle eviction bug visible.
    into the API. (Leaning: ship it, documented as advisory.)
 4. **Does a `"lru"` policy ever get built**, given §5? (Leaning: only if
    a real workload shows SIEVE losing to it — and then via index links.)
+5. **Added 2026-10-01: does the "effect memoizer" framing survive the
+   re-measurement?** §2's ruling followed from a ~63µs read; on boru main
+   a cache-shaped lookup is ~10µs (§2 note). The effect-wrapping API
+   centre and `Cache.stats` still make sense, but "never for
+   computation" is now too strong — the honest rule is "work costing
+   well over ~10µs". (Leaning: keep the effect-first framing, restate
+   the break-even with the new number, and let `stats` arbitrate.)
 
 ## Appendix — measurements behind §2
 
@@ -288,3 +439,24 @@ List/Map/Bytes/Store/Flex) rather than the map itself. **It directly sets
 the break-even in §2**, so improving it widens what this library is good
 for: at 6 µs instead of 63 µs, caching moderately-priced computation
 would start to pay.
+
+### Re-measured on boru main @ `64c5ab2` (2026-10-01)
+
+Compiled (the only execution path), on a shared 4-CPU container; medians
+of five runs; "net" subtracts the bare `each` loop (~1.2–1.35 µs per
+iteration, timed in the same run). Key building (`iota n each [convert
+String]`, the old loop baseline) now costs ~2.3 µs per key, against
+~1.9 µs before. Reproduce with `boru bench/map_cost.aql` (one n per run).
+
+| n | `flex` map writes | per op, net | `flex` map reads | per op, net | plain map reads | per op, net | `has` | per op, net |
+|---|---|---|---|---|---|---|---|---|
+| 10,000 | 32 ms | 2.0 µs | 32 ms | 2.0 µs | 21 ms | 0.9 µs | 20 ms | 0.8 µs |
+| 20,000 | 72 ms | 2.3 µs | 55 ms | 1.5 µs | 47 ms | 1.1 µs | 46 ms | 1.0 µs |
+| 40,000 | 165 ms | 2.8 µs | 133 ms | 2.0 µs | 113 ms | 1.5 µs | 101 ms | 1.2 µs |
+
+Reads went from ~63 µs to ~1–2 µs net (~30–60× cheaper); writes from
+~3.2 µs to ~2–3 µs. Reads are now no dearer than writes, so the
+asymmetry above — and the request for an upstream profile — is resolved.
+A cache-shaped lookup fn (a call, a hit-counter `get` + `set`, an entry
+`get`) measured ~8–9 µs net at n=10,000–40,000, ~9–13 µs in the
+single-run bench; that is the figure the break-even should use.
