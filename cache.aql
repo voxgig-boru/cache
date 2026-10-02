@@ -9,11 +9,14 @@
 # force each shape — lives in DESIGN.md at the repository root. Read it
 # before adding anything here.
 #
-# The headline finding, because it governs every later choice: a map read
-# costs ~63us on this runtime and a write ~3us, both O(1). A cache is only
-# worth installing over work that costs substantially more than a lookup,
-# so this library targets expensive EFFECTS (network, file, heavy parse)
-# and explicitly not cheap pure computation, where it would be a net loss.
+# The headline finding, because it governs every later choice: a cache is
+# only worth installing over work that costs substantially more than a
+# lookup. The design measured a ~63us map read (old interpreter); on boru
+# main @ 64c5ab2 (compiled) a read is ~1-3us, a write ~2-4us, both O(1),
+# and a cache-shaped lookup ~10us (DESIGN.md section 2 note,
+# bench/map_cost.aql). So this library targets expensive EFFECTS
+# (network, file, heavy parse) and not cheap pure computation, where it
+# would be a net loss.
 #
 # --- representation ---
 #
@@ -23,10 +26,12 @@
 # textbook LRU needs and boru cannot express well.
 #
 # Calling convention: forward args, receiver (the cache) LAST —
-# `Cache.verb ...args c`, with the piping form `c Cache.verb ...args end`
+# `Cache.verb ...args c`, with the piping form `c Cache.verb ...args`
 # equally valid. Fixed now so the design cannot drift from it.
 #
-# Imported via `import "./cache.aql"`.
+# Imported via `import "./cache.aql"` — a relative import resolves against
+# the importing file's own directory (a suite in test/ imports
+# "../cache.aql").
 
 export "Cache" {
 }

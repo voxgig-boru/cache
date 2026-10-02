@@ -1,7 +1,7 @@
 {
   "name": "voxgig-boru",
   "owner": { "name": "voxgig-boru" },
-  "description": "Plugins for the voxgig AQL ecosystem.",
+  "description": "Plugins for the voxgig boru ecosystem.",
   "plugins": [
     {
       "name": "cache-aql",
