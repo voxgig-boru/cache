@@ -1,14 +1,15 @@
 #!/bin/bash
-# SessionStart hook: ensure the `boru` interpreter is available so the agent can
+# SessionStart hook: ensure the `boru` binary is available so the agent can
 # run this library's scripts and tests. boru has no tagged release, so we build
-# it from source at the commit this library is pinned to (the same ref CI uses).
+# it from source at boru-lang/boru main HEAD (the same ref CI resolves). The CLI
+# module is cmd/go; its thin main package is cmd/go/boru, built as ./boru.
 #
 # Synchronous and idempotent: skips the build if the binary already exists, and
 # caches into the container so later sessions are instant. Progress goes to
 # stderr; stdout is left clean (SessionStart stdout is injected as context).
 set -uo pipefail
 
-# Web sessions are the target; locally a developer already has aql. No-op
+# Web sessions are the target; locally a developer already has boru. No-op
 # elsewhere. (Remove this guard to build everywhere.)
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
@@ -37,14 +38,19 @@ else
     exit 0
   fi
   if ! command -v go >/dev/null 2>&1; then
-    log "WARNING: Go toolchain not found; cannot build aql. Install Go, or build boru manually (see docs/how-to.md)."
+    log "WARNING: Go toolchain not found; cannot build boru. Install Go, or build boru manually (see docs/how-to.md)."
     exit 0
   fi
   log "Building boru @ $BORU_REF (main HEAD) from source…"
   mkdir -p "$BIN_DIR"
   src="$(mktemp -d)"
-  if git clone --quiet https://github.com/boru-lang/boru "$src" \
-     && git -C "$src" checkout --quiet "$BORU_REF"; then
+  # Codeload tarball first (works where a raw `git clone` of boru-lang/boru is
+  # egress-blocked behind the agent proxy), `git clone` as the fallback.
+  if curl -fsSL "https://codeload.github.com/boru-lang/boru/tar.gz/$BORU_REF" 2>/dev/null \
+       | tar -xz -C "$src" --strip-components=1 2>/dev/null \
+     || { rm -rf "$src"; src="$(mktemp -d)"; \
+          git clone --quiet https://github.com/boru-lang/boru "$src" \
+          && git -C "$src" checkout --quiet "$BORU_REF"; }; then
     ( cd "$src/cmd/go" \
       && GOWORK=off GOFLAGS=-mod=mod go build \
            -ldflags "-X github.com/boru-lang/boru/cmd/go.Version=${BORU_REF}" \

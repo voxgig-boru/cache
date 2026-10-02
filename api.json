@@ -2,15 +2,16 @@
   "name": "cache",
   "version": "0.0.0",
   "aql_ref": "main",
+  "verified_against": "boru-lang/boru main @ 64c5ab2 (2026-10-01)",
   "status": "designed-not-implemented",
   "description": "Bounded caching with pluggable eviction for boru, to be exposed as the single `Cache` namespace. NOT YET IMPLEMENTED: cache.aql exports an empty namespace. See DESIGN.md.",
   "conventions": {
-    "import": "import \"./cache.aql\"",
-    "call": "forward args, receiver (the cache) LAST: `Cache.verb ...args c`. Piping `c Cache.verb ...args end` binds identically; only receiver-first-all-forward misbinds.",
-    "scope": "This is an EFFECT MEMOIZER, not a general-purpose cache. A map read costs ~63us on this runtime, so caching work cheaper than that makes the program slower. Wrap network calls, file reads and expensive parses.",
-    "keys": "Cache keys are Strings: boru map keys must be String or Atom.",
-    "time": "The library never reads the clock (`clock` is a gated policy scope). If TTL lands, the caller supplies the timestamp.",
-    "memoize": "There is deliberately no `memoize` word: passing a function across a module boundary hits boru's free-word scope defect (design/FUNCTION-VALUE-SCOPE.0.md).",
+    "import": "import \"./cache.aql\" — no `end` needed. A relative import resolves against the directory of the importing file (for both `boru X` and `boru check X`), not the working directory: a suite in test/ imports \"../cache.aql\".",
+    "call": "forward args, receiver (the cache) LAST: `Cache.verb ...args c`. Piping `c Cache.verb ...args` binds identically. Receiver-first all-forward misbinds: with a typed receiver `boru check` rejects it (uncalled_function, which also blocks `boru X`); two same-typed args bind silently in signature order. Pass a function as data with `f/v` (a bare name holding a function calls; `/r` was renamed `/v`).",
+    "scope": "An EFFECT MEMOIZER first: a cache only pays over work dearer than a lookup. Re-measured on boru main @ 64c5ab2 (compiled): a map read ~1-3us, a write ~2-4us, a cache-shaped lookup (call + hit-counter bump + entry read) ~10us — the design was argued from ~63us reads on the old interpreter (DESIGN.md section 2 note, bench/map_cost.aql). Caching work cheaper than ~10us makes the program slower. Wrap network calls, file reads and expensive parses.",
+    "keys": "Cache keys are Strings: boru map keys must be String or Atom (a String and an Atom of the same text share a slot). Internally a computed key needs parens with `set` (`ent set (key) v`): `set` quotes a bare word, while `get`/`has` evaluate their key.",
+    "time": "The library never reads the clock: if TTL lands, the caller supplies the timestamp. On boru main the gate that bites is the module-import gate (e.g. the gen profile refuses `import \"boru:time-util\"`), not the clock scope (DESIGN.md section 6 note).",
+    "memoize": "No `memoize` word in v1, by scope rather than by defect: the free-word scope defect that once blocked it (design/FUNCTION-VALUE-SCOPE.0.md) is fixed upstream (boru 7e98aeb) and re-verified on main.",
     "external_deps": []
   },
   "modules": {

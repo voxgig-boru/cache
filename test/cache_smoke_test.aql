@@ -7,8 +7,8 @@
 # Run:
 #   boru test/cache_smoke_test.aql
 
-import "./cache.aql" end
+import "../cache.aql"
 
-print ("--- cache smoke demo ---") end
-print ("Cache namespace is empty: designed, not implemented (see DESIGN.md)") end
-print ("--- ok ---") end
+print ("--- cache smoke demo ---")
+print ("Cache namespace is empty: designed, not implemented (see DESIGN.md)")
+print ("--- ok ---")

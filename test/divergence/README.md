@@ -1,102 +1,99 @@
-# Three-way test check: interpreter · check · byte compiler
+# Single-path gate: run · check
 
-This library's `.aql` suites are written once and must mean the same thing
-no matter how `boru` runs them. `run.sh` runs every suite through all three
-execution surfaces and asserts none errors or disagrees:
+This library's suites are written once and must run clean on boru **main**.
+`run.sh` holds every suite to two conditions:
 
 ```bash
-boru X            # interpreter — the default; what CI and users run
-boru check X      # static type-check — must report 0 errors
-boru --compile X  # byte compiler — bytecode when compilable, else a SILENT
-                 #   fallback to the interpreter; documented to be IDENTICAL
-                 #   to it ("opt-in performance, never semantics")
+boru X         # compile to bytecode + run on the VM — must exit 0, and an
+               #   assertion-bearing suite must print `all green`
+boru check X   # static check — must report 0 errors
 ```
 
-It also prints an `boru --force-compile X` coverage line per suite — how much
-of each program the bytecode emitter can fully lower today. Refusals there
-are expected gaps (under `--compile` they fall back to the interpreter), not
-failures.
+and also checks the library module (`cache.aql`) standalone for 0 errors.
+
+## Why it is no longer a three-way comparison
+
+Until 2026-09 this harness compared three execution surfaces — the
+interpreter (`boru X`), `boru check X` and the byte compiler
+(`boru --compile X`, plus an informational `--force-compile` coverage line) —
+and failed on any disagreement. That model is gone upstream:
+
+- **There is one execution path.** Since boru 2026-09-19 a program is
+  compiled to bytecode and run on the VM, or it fails with
+  `[boru/compile_failed] … this is a compiler defect`. There is no
+  interpreter fallback.
+- **The flags are retired.** `--compile`, `--force-compile` and
+  `--no-compile` are usage errors now (`flag provided but not defined`,
+  exit 1); the `BORU_COMPILE` / `BORU_FORCE_COMPILE` / `BORU_NO_COMPILE` env
+  vars are retired too and are silently ignored.
+- **`boru X` runs the check first.** A pre-flight `boru check` error blocks
+  the run (`-no-check` skips it; this harness never uses it).
+
+So "the suite runs" now means "the suite fully compiles", and the only two
+surfaces left to gate are the run and the check. The directory keeps its old
+name so the CI job and the docs that call `test/divergence/run.sh` keep
+working.
 
 ## Running it
 
 ```bash
-test/divergence/run.sh
+test/divergence/run.sh                              # build boru @ main HEAD (cached), then gate
+BORU=$HOME/.local/bin/boru test/divergence/run.sh   # use an existing binary, no build
+BORU_REF=64c5ab2 test/divergence/run.sh             # build a specific ref
 ```
 
-`run.sh` builds its own boru at a ref pinned in the script (the same `407feda`
-the library now pins; pinning it here keeps the harness self-contained, so it
-never depends on whatever boru is on `PATH`), then prints a per-suite matrix:
+Without `BORU`, the script builds its own boru so it never depends on what is
+on `PATH`: it resolves `boru-lang/boru` main HEAD, fetches the source as a
+codeload tarball (works where a raw `git clone` is blocked), builds
+`cmd/go` → `./boru`, and caches the binary under `~/.cache/boru-divergence`
+keyed by the SHA (it rebuilds only when main advances). Needs `go` + network
+for that one-time build. `BORU_TIMEOUT` (default 600) caps each invocation.
+
+Sample output (boru main @ 64c5ab2, 2026-10-01):
 
 ```
-  SUITE                         INTERPRETER   CHECK           BYTECODE
-  cache_unit_test.aql           ok            ok              ok
-  cache_unit_spec.aql           ok            ok              ok
-  cache_prop_test.aql           ok            ok              ok
-  cache_prop_spec.aql           ok            ok              ok
-  cache_smoke_test.aql          ok            ok              ok
+[divergence] suites — run (boru X) must exit 0 [+ print 'all green'], check must report 0 errors:
+  SUITE                       RUN                     CHECK         SECONDS
+  cache_unit_test.aql         ok                      ok            0
+  cache_unit_spec.aql         ok                      ok            0
+  cache_prop_test.aql         ok                      ok            0
+  cache_prop_spec.aql         ok                      ok            0
+  cache_smoke_test.aql        ok                      ok            0
+
+[divergence] modules — boru check must report 0 errors:
+  cache.aql                   ok
+
+[divergence] PASS — every suite compiles, runs green, and checks clean; every module checks clean.
 ```
 
-It exits non-zero on any interpreter failure, any check **error**, or any
-difference between `boru --compile X` and `boru X`. Needs `go` + network for the
-one-time build (cached in `~/.cache/aql-divergence`).
+The library is **designed, not implemented** (`cache.aql` exports an empty
+`Cache` namespace), so the suites are placeholders: they import the module,
+and the four assertion-bearing ones assert `Test.fail-count` is `0` and print
+`all green`. Each suite `boru check`s with 0 errors and one advisory info
+(`module_body_executed_in_check` — the checker runs an imported module's body
+to type its exports; expected, not a defect).
 
-## Background: what this guards against (and the bug it caught)
+## What changed for the suites on boru main
 
-`boru --compile` is documented to return results identical to the interpreter
-(it falls back to the interpreter for anything it can't lower). This harness
-exists because that promise has been broken before, and broke again twice on
-`main` (the regressions recorded in that project).
-
-The original divergence this guard caught (in the sibling `bloom-filter`
-project, from which this repository was templated): a compiled `each` body
-**dropped a block-local binding** from the enclosing block —
-
-```boru
-import "boru:test" end
-import "./bloom.aql" end
-[ def bf ({n: 1000, p: 0.01} Bloom.make end)
-  def _ (iota 50 each [ var [[i] bf Bloom.add (convert String i) end 0 ] ])
-  def cnt (bf Bloom.count end)
-  true (45 lte cnt) Assert.equal end
-] "count" Test.test end
-# interpreter => passes
-# --compile (on the old pin) => each: element 0: undefined word: bf
-```
-
-— so `bf Bloom.add …` raised `undefined word: bf` and, because the emitter
-believed it could lower the body, `--compile` did **not** fall back and the
-wrong result escaped. That project's unit suite was restructured to build
-its bulk fixture (`_seen`) at **top level** instead of inside the `Test.test`
-block, which both keeps it in scope for the compiler and (the underscore)
-skips `boru check`'s unused_def false positive for body-only defs.
-
-**Status (boru `407feda`, the current pin): fixed upstream.** The reduced
-repro above is now byte-identical between interpreter and `--compile`, and
-all five suites are clean across all three surfaces. The `_seen` fixture is
-kept anyway — it's harmless and keeps the suite robust on older builds. This
-harness stays as the regression guard (it has already caught two transient
-`main` regressions).
-
-`--force-compile` now fully compiles `cache_prop_test.aql`; the rest refuse
-on code-body words (`each` / `do` / `test-test`, "Stage 2") and fall back
-cleanly under `--compile` — sound by `boru-lang/boru`'s
-`design/COMPILABLE-SUBSET.md` ("refusal is always sound; the worst failure
-mode is slow, not wrong").
+- **Relative imports anchor on the importing file.** The suites in `test/`
+  import `"../cache.aql"`. The old `"./cache.aql"` points at a missing
+  `test/cache.aql`, which boru main does *not* report as a missing file: the
+  check degrades the import to an opaque module and the compile pass then
+  fails with `[boru/compile_failed] … residual value of unknown provenance`
+  and no source position (see `dx-report.md`).
+- **The library is imported before `boru:test`**, the order the sibling
+  bloom-filter / stats suites need. `boru:test` mints its record types from a
+  fresh type-ID counter, so a library class can collide with one of them
+  (`expected X, got X`). There is no class here yet; note that the order alone
+  is not a guaranteed fix — whether a class collides depends on the type ID it
+  lands on (see `dx-report.md`).
+- **The summary prints one value per statement** (`print ("…")`) and asserts
+  with the forward `Assert.equal 0 (Test.fail-count)` (expected first): a
+  postfix `"x" print` chain collects forward and prints out of order.
 
 ### Wiring it into CI
 
-`run.sh` is self-contained, so a gating job is one block (add it to
-`.github/workflows/test.yml` — needs a token with `workflow` scope, which the
-agent session that wrote this didn't have):
-
-```yaml
-  divergence:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-      - name: interpreter / check / byte-compiler agreement
-        run: test/divergence/run.sh
-```
+`.github/workflows/test.yml` already runs this script in its `divergence` job
+(`run: test/divergence/run.sh`), so the job picked up the single-path gate
+without a workflow edit; only the job's step name still says
+"interpreter / check / byte-compiler agreement".

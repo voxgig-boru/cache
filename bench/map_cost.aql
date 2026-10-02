@@ -1,0 +1,61 @@
+# Map read / write cost on the running boru — the measurement behind
+# DESIGN.md §2 (the cache break-even). Compiled: since boru 2026-09-19 the
+# bytecode VM is the only execution path, so this is what real code hits.
+#
+# Run from the repo root:   boru bench/map_cost.aql
+#
+# Each segment is one `each` over the same N prebuilt String keys. The
+# baseline segment is the identical loop with no map operation, so
+# "net" = segment minus baseline = the operation itself. The timings are
+# wall clock, so run it on a quiet machine and take the best of a few runs.
+import "boru:time-util"
+
+def nk 20000
+def ks (iota nk each [convert String])
+def ent (flex {})
+def ctr (flex {hits: 0})
+
+# per-op nanoseconds for a segment that took `d` (a ClockDuration)
+def per-op fn [[d:Any] [Integer] [ convert Integer (((TimeUtil.total-ms d) mul 1000000.0) div nk) ]]
+
+# warm-up: one untimed pass, so the first timed segment is not charged for it
+def _warm (ks each [ var [[k] k ] ])
+
+def t0 (TimeUtil.now)
+def _b (ks each [ var [[k] k ] ])
+def bare (per-op (TimeUtil.elapsed t0))
+
+def t1 (TimeUtil.now)
+def _w (ks each [ var [[k] ent set (k) 1 drop 0 ] ])
+def wr (per-op (TimeUtil.elapsed t1))
+
+def t2 (TimeUtil.now)
+def _r (ks each [ var [[k] ent get (k) ] ])
+def rd (per-op (TimeUtil.elapsed t2))
+
+def t3 (TimeUtil.now)
+def _h (ks each [ var [[k] ent has (k) ] ])
+def hs (per-op (TimeUtil.elapsed t3))
+
+def plain (node ent)
+def t4 (TimeUtil.now)
+def _p (ks each [ var [[k] plain get (k) ] ])
+def prd (per-op (TimeUtil.elapsed t4))
+
+# a cache-shaped lookup: one fn call that bumps a hit counter (a flex read
+# and a flex write) and reads the entry map
+def lookup fn [[key:String] [Any] [
+  def _c (ctr set hits ((ctr get "hits") add 1))
+  ent get (key)
+]]
+def t5 (TimeUtil.now)
+def _l (ks each [ var [[k] lookup k ] ])
+def lk (per-op (TimeUtil.elapsed t5))
+
+print (`n = ${nk} String keys; nanoseconds per operation (net = minus the bare loop)`)
+print (`bare each loop     ${bare}`)
+print (`flex map write     ${wr}  net ${(wr sub bare)}`)
+print (`flex map read      ${rd}  net ${(rd sub bare)}`)
+print (`flex map has       ${hs}  net ${(hs sub bare)}`)
+print (`plain map read     ${prd}  net ${(prd sub bare)}`)
+print (`cache-shaped fn    ${lk}  net ${(lk sub bare)}`)

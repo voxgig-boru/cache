@@ -8,12 +8,20 @@
 # Run:
 #   boru test/cache_unit_spec.aql
 
-import "boru:test" end
-import "./cache.aql" end
+# The library is imported before boru:test — the order the sibling
+# bloom-filter / stats suites need. On boru main @ 64c5ab2 boru:test mints
+# its record types from a fresh type-ID counter, so a library class can
+# collide with one of them and fail its own return-type check ("expected X,
+# got X"); whether it does depends on the type ID the class lands on, not
+# only on import order. See dx-report.md.
+import "../cache.aql"
+import "boru:test"
 
 # --- summary -------------------------------------------------------
 
-"---" print
-"fail count: " print Test.fail-count end print
-0 Test.fail-count end Assert.equal end
-"all green" print
+# One value per `print (…)` statement: a postfix `"x" print` chain collects
+# forward and prints out of order.
+print ("---")
+print (`fail count: ${(Test.fail-count)}`)
+Assert.equal 0 (Test.fail-count)
+print ("all green")
