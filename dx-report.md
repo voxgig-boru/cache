@@ -166,6 +166,13 @@ the design.
   when no clock capability is installed), although PERMISSIONS.10.md
   binds the global `clock` cap to `clock.now`. The import gate does
   refuse it (the `gen` profile denies `import "boru:time-util"`).
+  Related upstream record: `design/MODULE-SECURITY.0.md` §9.4 ("Clock is
+  leaky") already says a "no clock" grant is not airtight, but it names
+  only `sleep`/`timeout`/`interval`/`elapsed` and `boru:test` bypassing
+  `EffectiveClock`. This gap is a different one: `TimeUtil.now` *does* go
+  through `EffectiveClock` (`lang/go/native/capabilities.go`), which
+  returns `capabilities.WallClock{}` whenever no clock capability is
+  installed, so denying the scope never reaches it. Not in NUR.md.
 
 ### Other notes from re-verifying DESIGN.md
 
