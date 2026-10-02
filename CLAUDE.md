@@ -17,12 +17,14 @@ accident:
   cache-shaped lookup ~10µs (DESIGN.md §2 note, `bench/map_cost.aql`), so
   the framing is now open question 5 rather than a runtime necessity.
 - **Default eviction is SIEVE, not LRU.** A textbook LRU needs a
-  doubly-linked list, which boru cannot express well (cyclic flex
-  references break `jsonify` and risk `deq` recursion). CLOCK/SIEVE need
-  only an array and a hand — and beat LRU on hit rate anyway.
-- **The library never reads the clock.** `clock` is a gated policy scope;
-  TTL takes `now` as a parameter so the core stays zero-capability and
-  deterministic under property tests.
+  doubly-linked list, which boru cannot express well (on main a cyclic
+  flex structure crashes the process in `print`/`jsonify`/`deq`).
+  CLOCK/SIEVE need only an array and a hand — and beat LRU on hit rate
+  anyway.
+- **The library never reads the clock.** Importing `boru:time-util` is
+  refused by restrictive profiles (e.g. `gen`); TTL takes `now` as a
+  parameter so the core stays zero-capability and deterministic under
+  property tests (DESIGN.md §6 note).
 
 `Cache.memoize` is absent from v1 by scope, not by defect: the boru
 function-value scope defect that once blocked it
