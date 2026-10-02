@@ -101,7 +101,7 @@ document does not pursue it.
 > **Note (2026-10-01, boru main @ `64c5ab2`) — the measurement, redone.**
 > "Interpreter path" and "`each` bodies refuse compilation" are both gone:
 > since 2026-09-19 every program compiles to bytecode or fails, and the
-> loops below compiled with no runtime-constructed callbacks
+> benchmark loops compiled with no runtime-constructed callbacks
 > (`boru -compile-report`). Re-measured with
 > [`bench/map_cost.aql`](bench/map_cost.aql) plus an n-sweep (Appendix),
 > on a 4-CPU container shared with other jobs, so treat the figures as
