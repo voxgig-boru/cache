@@ -65,6 +65,17 @@ else
     BORU_REF="$(git ls-remote https://github.com/boru-lang/boru.git main | cut -f1)"
   fi
   [ -n "$BORU_REF" ] || { echo "error: could not resolve boru main HEAD (network?); set BORU=/path/to/boru." >&2; exit 1; }
+  # A symbolic ref (main, a tag, feature/x, refs/heads/main) is mutable and may
+  # contain '/': resolve it to the commit it names, so the cache key below is
+  # immutable and a valid file name. A hex SHA (full or abbreviated) is used as given.
+  case "$BORU_REF" in
+    *[!0-9a-f]*)
+      _sha="$(git ls-remote https://github.com/boru-lang/boru.git "$BORU_REF" 2>/dev/null | awk -v r="$BORU_REF" '
+        $2==r || $2=="refs/heads/"r {h=$1} $2=="refs/tags/"r {t=$1} $2=="refs/tags/"r"^{}" {p=$1}
+        END {print (h!="" ? h : (p!="" ? p : t))}')"
+      [ -n "$_sha" ] || { echo "error: could not resolve BORU_REF=$BORU_REF to a boru-lang/boru commit (network?); pass a commit SHA or set BORU=/path/to/boru." >&2; exit 1; }
+      BORU_REF="$_sha" ;;
+  esac
   CACHE="$HOME/.cache/boru-divergence"
   BORU="$CACHE/boru-$BORU_REF"
   if [ ! -x "$BORU" ]; then
